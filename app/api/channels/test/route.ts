@@ -1,21 +1,18 @@
-import { NextRequest, NextResponse } from "next/server"
+import { type NextRequest, NextResponse } from "next/server"
 
 export const dynamic = "force-dynamic"
 
-// Test if an HLS URL is reachable and valid
 export async function POST(request: NextRequest) {
   try {
     const { url } = await request.json()
 
     if (!url || typeof url !== "string") {
-      return NextResponse.json({ ok: false, error: "URL is required" }, { status: 400 })
+      return NextResponse.json({ ok: false, error: "URL es obligatoria" }, { status: 400 })
     }
 
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      return NextResponse.json({ ok: false, error: "Invalid URL scheme" }, { status: 400 })
+      return NextResponse.json({ ok: false, error: "Esquema de URL invalido" }, { status: 400 })
     }
-
-    const startTime = Date.now()
 
     let origin: string
     let referer: string
@@ -24,8 +21,13 @@ export async function POST(request: NextRequest) {
       origin = u.origin
       referer = u.origin + "/"
     } catch {
-      return NextResponse.json({ ok: false, error: "Malformed URL" }, { status: 400 })
+      return NextResponse.json({ ok: false, error: "URL malformada" }, { status: 400 })
     }
+
+    const startTime = Date.now()
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15000)
 
     const res = await fetch(url, {
       headers: {
@@ -37,9 +39,10 @@ export async function POST(request: NextRequest) {
       },
       cache: "no-store",
       redirect: "follow",
-      signal: AbortSignal.timeout(10000),
+      signal: controller.signal,
     })
 
+    clearTimeout(timeout)
     const latencyMs = Date.now() - startTime
     const contentType = res.headers.get("content-type") || ""
     const text = await res.text()
@@ -52,29 +55,30 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Check if it looks like a valid HLS playlist
     const isM3u8 = text.includes("#EXTM3U") || text.includes("#EXT-X-")
     const isMaster = text.includes("#EXT-X-STREAM-INF")
     const isMedia = text.includes("#EXTINF")
     const lines = text.split("\n").filter((l) => l.trim().length > 0 && !l.trim().startsWith("#"))
 
     return NextResponse.json({
-      ok: isM3u8,
-      error: isM3u8 ? undefined : "Response is not a valid HLS playlist",
+      ok: true,
       latencyMs,
       contentType,
-      isM3u8,
+      isHls: isM3u8,
       isMaster,
       isMedia,
       segmentCount: lines.length,
       playlistSize: text.length,
       httpStatus: res.status,
+      type: isM3u8 ? (isMaster ? "Master Playlist" : isMedia ? "Media Playlist" : "HLS") : "Non-HLS Content",
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error"
+    const message = err instanceof Error ? err.message : "Error desconocido"
     return NextResponse.json({
       ok: false,
-      error: message.includes("timeout") ? "Connection timeout (10s)" : message,
+      error: message.includes("abort") || message.includes("timeout")
+        ? "Timeout de conexion (15s)"
+        : message,
     })
   }
 }
